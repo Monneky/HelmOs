@@ -1,49 +1,49 @@
 # HelmOs
 
-Monorepo con API (Go) y Dashboard (Next.js 14) para HelmOs.
+Monorepo with Go API and Next.js 14 Dashboard for HelmOs.
 
-## Estructura
+## Structure
 
 ```
 helmos/
 ├── apps/
-│   ├── api/          → Backend en Go (puerto 3001, SQLite, CORS, JWT listo)
-│   └── dashboard/    → Frontend Next.js 14 (App Router, TypeScript, Tailwind)
+│   ├── api/          → Go backend (port 3001, SQLite, CORS, JWT-ready)
+│   └── dashboard/    → Next.js 14 frontend (App Router, TypeScript, Tailwind)
 ├── docker/
-│   └── traefik/      → Configuración de Traefik
-├── .env.example      → Variables de entorno documentadas
-├── docker-compose.yml      → Producción
-├── docker-compose.dev.yml  → Desarrollo local
+│   └── traefik/      → Traefik configuration
+├── .env.example      → Documented environment variables
+├── docker-compose.yml      → Production
+├── docker-compose.dev.yml  → Local development
 └── README.md
 ```
 
-## Requisitos
+## Requirements
 
 - **API:** Go 1.22+
 - **Dashboard:** Node.js 18+, npm
-- **Opcional:** Docker y Docker Compose para despliegue
+- **Optional:** Docker and Docker Compose for deployment
 
-## Configuración
+## Setup
 
-1. Copia las variables de entorno:
+1. Copy the environment file:
 
    ```bash
    cp .env.example .env
    ```
 
-2. Edita `.env` y define al menos `JWT_SECRET` y `HELMOS_DATA_DIR` (y el resto según necesites).
+2. Edit `.env` and set at least `JWT_SECRET` and `HELMOS_DATA_DIR` (and the rest as needed).
 
-## Desarrollo local
+## Local development
 
 ### API (Go)
 
 ```bash
 cd apps/api
-go mod tidy   # si hace falta descargar dependencias
+go mod tidy   # if you need to fetch dependencies
 go run ./cmd/api
 ```
 
-La API estará en `http://localhost:3001`. Endpoints: `GET /health`, `GET /db-check`.
+The API will be available at `http://localhost:3001`. Endpoints: `GET /health`, `GET /db-check`.
 
 ### Dashboard (Next.js)
 
@@ -53,36 +53,36 @@ npm install
 npm run dev
 ```
 
-El dashboard estará en `http://localhost:3000`.
+The dashboard will be available at `http://localhost:3000`.
 
-### Con Docker (desarrollo)
+### With Docker (development)
 
 ```bash
 cp .env.example .env
 docker compose -f docker-compose.dev.yml --profile dev up
 ```
 
-## Producción
+## Production
 
 ```bash
 cp .env.example .env
-# Ajusta .env (HELMOS_DOMAIN, JWT_SECRET, etc.)
+# Adjust .env (HELMOS_DOMAIN, JWT_SECRET, etc.)
 docker compose up -d
 ```
 
-## Variables de entorno
+## Environment variables
 
-Ver `.env.example`. Resumen:
+See `.env.example`. Summary:
 
-| Variable          | Descripción                    |
+| Variable          | Description                    |
 |-------------------|--------------------------------|
-| `HELMOS_DOMAIN`   | Dominio del servicio           |
-| `HELMOS_EMAIL`    | Email del administrador        |
-| `HELMOS_DATA_DIR` | Directorio de datos (SQLite)   |
-| `HELMOS_PORT`     | Puerto de la API (default 3001)|
-| `JWT_SECRET`      | Secreto para JWT               |
-| `ADMIN_EMAIL`     | Email del admin del dashboard  |
+| `HELMOS_DOMAIN`   | Service domain                 |
+| `HELMOS_EMAIL`    | Admin email                    |
+| `HELMOS_DATA_DIR` | Data directory (SQLite)        |
+| `HELMOS_PORT`     | API port (default 3001)        |
+| `JWT_SECRET`      | Secret for JWT                 |
+| `ADMIN_EMAIL`     | Dashboard admin email          |
 
-## Licencia
+## License
 
-Ver [LICENSE](LICENSE).
+See [LICENSE](LICENSE).
