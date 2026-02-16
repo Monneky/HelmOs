@@ -1,0 +1,396 @@
+# HelmOS — Cursor Rules
+
+## Proyecto
+HelmOS es una plataforma self-hosted open source.
+- **API:** Go + Chi router
+- **Dashboard:** Next.js 14 + TypeScript + Tailwind CSS
+- **DB:** SQLite con sqlc o database/sql
+- **Contenedores:** Docker + Docker Compose
+- **Proxy:** Traefik con SSL automático
+
+---
+
+## Go — Reglas generales
+
+- Usar Go 1.22+. Siempre.
+- Seguir las convenciones oficiales de Go: https://go.dev/doc/effective_go
+- Usar `gofmt` y `golangci-lint` — el código siempre debe pasar el linter.
+- Nombrar paquetes en `lowercase` sin guiones ni underscores: `auth`, `apps`, `monitor`.
+- Nunca usar `panic` en código de producción — siempre retornar `error`.
+- Manejar TODOS los errores explícitamente. Nunca ignorar un error con `_`.
+- Usar `errors.New()` para errores simples y `fmt.Errorf("context: %w", err)` para wrapping.
+- Preferir composición sobre herencia — usar interfaces pequeñas.
+- Las interfaces van donde se USAN, no donde se implementan.
+
+```go
+// ✅ Correcto — manejar error explícitamente
+user, err := s.repo.GetUserByEmail(ctx, email)
+if err != nil {
+    return nil, fmt.Errorf("auth: get user by email: %w", err)
+}
+
+// ❌ Incorrecto — ignorar error
+user, _ := s.repo.GetUserByEmail(ctx, email)
+```
+
+---
+
+## Go — Estructura de carpetas
+
+```
+apps/api/
+  cmd/
+    server/
+      main.go           → entry point, inyección de dependencias
+  internal/
+    auth/
+      handler.go        → HTTP handlers (reciben request, llaman service)
+      service.go        → lógica de negocio
+      repository.go     → queries a la DB
+      model.go          → structs del dominio
+    apps/
+      handler.go
+      service.go
+      repository.go
+      model.go
+    monitor/
+    drive/
+    network/
+    ai/
+  pkg/
+    database/
+      db.go             → conexión SQLite y migraciones
+    middleware/
+      auth.go           → middleware JWT
+      logger.go         → middleware de logging
+    config/
+      config.go         → leer y validar variables de entorno
+    docker/
+      client.go         → wrapper del Docker API
+    response/
+      response.go       → helpers para respuestas JSON estandarizadas
+  go.mod
+  go.sum
+```
+
+---
+
+## Go — Patrones obligatorios
+
+### Handler → Service → Repository
+Siempre separar en 3 capas. Nunca poner queries SQL en los handlers.
+
+```go
+// model.go — struct del dominio
+type User struct {
+    ID           string    `json:"id"`
+    Email        string    `json:"email"`
+    Role         string    `json:"role"`
+    PasswordHash string    `json:"-"` // nunca exponer en JSON
+    CreatedAt    time.Time `json:"createdAt"`
+}
+
+// repository.go — solo habla con la DB
+type UserRepository interface {
+    GetByEmail(ctx context.Context, email string) (*User, error)
+    GetByID(ctx context.Context, id string) (*User, error)
+    Create(ctx context.Context, user *User) error
+}
+
+// service.go — lógica de negocio, usa el repository
+type AuthService struct {
+    repo   UserRepository
+    config *config.Config
+}
+
+func NewAuthService(repo UserRepository, cfg *config.Config) *AuthService {
+    return &AuthService{repo: repo, config: cfg}
+}
+
+func (s *AuthService) Login(ctx context.Context, email, password string) (*TokenPair, error) {
+    user, err := s.repo.GetByEmail(ctx, email)
+    if err != nil {
+        return nil, fmt.Errorf("auth: login: %w", err)
+    }
+    // ...
+}
+
+// handler.go — recibe HTTP request, llama al service, responde JSON
+type AuthHandler struct {
+    service *AuthService
+}
+
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+    var req LoginRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        response.Error(w, http.StatusBadRequest, "invalid request body")
+        return
+    }
+    // validar, llamar service, responder
+}
+```
+
+### Inyección de dependencias en main.go
+Nunca usar variables globales para dependencias — inyectar siempre.
+
+```go
+// cmd/server/main.go
+func main() {
+    cfg := config.Load()
+    db := database.Connect(cfg.DatabasePath)
+
+    userRepo := auth.NewSQLiteUserRepository(db)
+    authService := auth.NewAuthService(userRepo, cfg)
+    authHandler := auth.NewAuthHandler(authService)
+
+    r := chi.NewRouter()
+    r.Post("/auth/login", authHandler.Login)
+
+    log.Fatal(http.ListenAndServe(":"+cfg.Port, r))
+}
+```
+
+### Contexto
+- Siempre pasar `context.Context` como primer parámetro en funciones que llaman a la DB, red o Docker.
+- Nunca guardar context en structs.
+- Usar `r.Context()` en handlers para obtener el contexto del request.
+
+### Structs de request/response
+- Definir structs tipados para cada request y response. Nunca usar `map[string]interface{}`.
+- Validar inputs con una librería como `go-playground/validator`.
+
+```go
+type LoginRequest struct {
+    Email    string `json:"email" validate:"required,email"`
+    Password string `json:"password" validate:"required,min=8"`
+}
+
+type LoginResponse struct {
+    AccessToken  string `json:"accessToken"`
+    RefreshToken string `json:"refreshToken"`
+    User         UserDTO `json:"user"`
+}
+```
+
+### Respuestas estandarizadas
+Usar siempre el mismo formato de respuesta JSON en toda la API.
+
+```go
+// pkg/response/response.go
+type APIResponse[T any] struct {
+    Data    T      `json:"data,omitempty"`
+    Error   string `json:"error,omitempty"`
+    Success bool   `json:"success"`
+}
+
+func JSON[T any](w http.ResponseWriter, status int, data T) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(status)
+    json.NewEncoder(w).Encode(APIResponse[T]{Data: data, Success: true})
+}
+
+func Error(w http.ResponseWriter, status int, message string) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(status)
+    json.NewEncoder(w).Encode(APIResponse[any]{Error: message, Success: false})
+}
+```
+
+### Variables de entorno
+Nunca acceder a `os.Getenv()` directo en el código — siempre a través de `config.Config`.
+
+```go
+// pkg/config/config.go
+type Config struct {
+    Port         string
+    DatabasePath string
+    JWTSecret    string
+    DataDir      string
+    Domain       string
+}
+
+func Load() *Config {
+    return &Config{
+        Port:         getEnv("PORT", "3001"),
+        DatabasePath: getEnv("DATABASE_PATH", "./data/helmos.db"),
+        JWTSecret:    mustGetEnv("JWT_SECRET"),
+        DataDir:      getEnv("DATA_DIR", "./data"),
+        Domain:       getEnv("HELMOS_DOMAIN", ""),
+    }
+}
+
+func mustGetEnv(key string) string {
+    val := os.Getenv(key)
+    if val == "" {
+        log.Fatalf("required environment variable %s is not set", key)
+    }
+    return val
+}
+```
+
+---
+
+## TypeScript / Next.js — Reglas generales
+
+- TypeScript estricto SIEMPRE. Nunca usar `any`, usar `unknown` si el tipo no se sabe.
+- `strict: true` en `tsconfig.json`.
+- Todos los archivos son `.ts` o `.tsx`. Nunca `.js`.
+- Tipar TODOS los parámetros y valores de retorno de funciones.
+- Usar `type` para uniones y aliases. Usar `interface` para objetos que se extienden.
+- Nunca usar `as` para castear tipos salvo que sea inevitable — si se usa, agregar comentario.
+- `const` sobre `let`. Nunca `var`.
+- Usar optional chaining `?.` y nullish coalescing `??`.
+
+---
+
+## Next.js 14 — Estructura de carpetas
+
+```
+apps/dashboard/
+  app/
+    (auth)/
+      login/page.tsx
+      setup/page.tsx
+    (dashboard)/
+      layout.tsx          → sidebar + navbar
+      page.tsx            → dashboard principal
+      apps/
+        page.tsx
+        [id]/page.tsx
+      drive/page.tsx
+      ai/page.tsx
+      network/page.tsx
+      terminal/page.tsx
+      settings/
+        profile/page.tsx
+        users/page.tsx
+        api/page.tsx
+  components/
+    ui/                   → Button, Card, Modal, Badge, etc.
+    apps/                 → componentes del módulo apps
+    drive/
+    monitor/
+    ai/
+  lib/
+    api.ts                → cliente HTTP tipado para la API de Go
+    auth.ts               → helpers de autenticación
+    utils.ts              → cn(), formatBytes(), formatDate()
+  types/
+    index.ts              → tipos compartidos (deben coincidir con los structs de Go)
+  hooks/
+    useWebSocket.ts       → hook genérico para WebSockets
+    useMonitor.ts         → hook para métricas en tiempo real
+```
+
+---
+
+## Next.js — Reglas
+
+- Usar **App Router** siempre. Nunca Pages Router.
+- **Server Components** por defecto. Agregar `'use client'` solo para interactividad, hooks o eventos del browser.
+- Fetch de datos en Server Components o Server Actions. Nunca en `useEffect`.
+- Usar `loading.tsx` y `error.tsx` en cada segmento de ruta.
+- Las variables del servidor usan `process.env.VARIABLE`. Las del cliente usan prefijo `NEXT_PUBLIC_`.
+
+### Componentes
+- Un componente por archivo, nombre en `PascalCase`.
+- Tipar props con `interface` nombrada, nunca inline.
+- Si un componente supera 150 líneas, dividirlo.
+
+```tsx
+// ✅ Correcto
+interface AppCardProps {
+  app: App
+  onRestart: (id: string) => Promise<void>
+}
+
+export function AppCard({ app, onRestart }: AppCardProps) {
+  return <div className="rounded-lg border p-4">...</div>
+}
+```
+
+### Tailwind
+- Clases de Tailwind directamente. Sin CSS modules ni styled-components.
+- Usar `cn()` de `clsx` + `tailwind-merge` para clases condicionales.
+- Nunca `style={{}}` salvo para valores dinámicos imposibles con Tailwind.
+
+---
+
+## Reglas de nomenclatura
+
+| Contexto | Convención | Ejemplo |
+|---|---|---|
+| Paquetes Go | lowercase | `auth`, `monitor` |
+| Archivos Go | snake_case | `user_repository.go` |
+| Tipos/Structs Go | PascalCase | `AuthService`, `UserDTO` |
+| Variables Go | camelCase | `userRepo`, `authService` |
+| Constantes Go | PascalCase o UPPER_SNAKE | `MaxRetries`, `JWT_EXPIRY` |
+| Archivos TS/TSX | kebab-case | `app-card.tsx` |
+| Componentes React | PascalCase | `AppCard` |
+| Variables TS | camelCase | `accessToken` |
+| Constantes TS globales | UPPER_SNAKE_CASE | `API_BASE_URL` |
+
+---
+
+## Tipos compartidos Go ↔ TypeScript
+
+Los tipos del frontend deben coincidir con los structs de Go.
+Definir los tipos de TypeScript en `apps/dashboard/types/index.ts`
+reflejando exactamente los JSON responses de la API.
+
+```go
+// Go — model.go
+type App struct {
+    ID        string    `json:"id"`
+    Name      string    `json:"name"`
+    Status    string    `json:"status"`
+    Image     string    `json:"image"`
+    Domain    string    `json:"domain"`
+    CreatedAt time.Time `json:"createdAt"`
+}
+```
+
+```ts
+// TypeScript — types/index.ts
+export interface App {
+  id: string
+  name: string
+  status: 'running' | 'stopped' | 'error'
+  image: string
+  domain: string
+  createdAt: string // ISO string desde JSON
+}
+```
+
+---
+
+## Git
+
+- Commits en inglés, formato: `type(scope): description`
+- Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`
+- Ejemplos:
+  - `feat(auth): add JWT refresh token endpoint`
+  - `fix(apps): handle docker socket connection error`
+  - `chore(deps): update chi router to v5`
+- Nunca commitear `.env` — solo `.env.example`
+- Una feature = una branch = un Pull Request
+
+---
+
+## Lo que NUNCA hacer
+
+### Go
+- Nunca ignorar errores con `_`
+- Nunca usar `panic` en código de producción
+- Nunca poner queries SQL en los handlers
+- Nunca usar variables globales para dependencias
+- Nunca concatenar strings para SQL — siempre usar placeholders `?`
+- Nunca guardar `context.Context` en un struct
+
+### TypeScript
+- Nunca usar `any`
+- Nunca usar `useEffect` para fetch de datos en Next.js
+- Nunca poner lógica de negocio en componentes React
+- Nunca commitear secrets ni API keys
+- Nunca usar `var`
+- Nunca usar `==` en lugar de `===`
