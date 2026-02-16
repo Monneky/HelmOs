@@ -1,0 +1,37 @@
+# HelmOs - Docker Compose (desarrollo local)
+# Uso: docker compose -f docker-compose.dev.yml --profile dev up
+# Los apps se ejecutan en local (go run / npm run dev); aquí solo servicios auxiliares.
+
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/traefik:/etc/traefik:ro
+    profiles:
+      - dev
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      - HELMOS_PORT=3001
+      - HELMOS_DATA_DIR=/data
+    volumes:
+      - helmos_data_dev:/data
+    ports:
+      - "3001:3001"
+    profiles:
+      - dev
+
+volumes:
+  helmos_data_dev:
